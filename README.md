@@ -14,7 +14,7 @@ This is a Python-based keylogger designed for capturing and reporting keyboard i
 - Audio Recording
 - Screenshot Capturing
 - System Information
-
+- USB Device Monitoring
 
 
 
